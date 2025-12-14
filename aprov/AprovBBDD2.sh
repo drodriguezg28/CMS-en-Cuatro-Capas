@@ -59,5 +59,5 @@ sudo systemctl enable mariadb.service
 sudo systemctl start mariadb.service
 
 # Inhabilitar la red NAT
-#sudo route del default
+sudo route del default
 echo "Configuración de MariaDB y de la base de datos completado."
