@@ -46,4 +46,6 @@ sudo systemctl enable haproxy
 sudo systemctl restart haproxy
 
 
-#sudo route del default
+# Inhabilitar la red NAT
+sudo route del default
+echo "Configuración de HAproxy y inhabilitación de NAT completado."
