@@ -32,5 +32,5 @@ echo "Nginx reiniciado. La configuración está activa."
 
 
 # Inhabilitar la red NAT
-#sudo route del default
+sudo route del default
 echo "Configuración de MariaDB y de la base de datos completado."
