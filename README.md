@@ -1,22 +1,102 @@
 # CMS-en-Cuatro-Capas
 
-Este CMS de **WordPress** montado a través de **AWS** está organizado en **tres capas**: pública, privada (aplicación + NFS) y privada (base de datos).
+Está estructura de un sistema de gestión de usuarios está hecho en una pila LEMP.
 
 ---
 
 # ÍNDICE 
-1. [Arquitectura de la Infraestructura](#arquitectura)
-2. [Conectividad](#conectividad) 
-3. [Scripts de Aprovisionamiento](#aprovisionamiento)  
-   - [Balanceador](#balanceador)  
-   - [Servidor NFS](#nfs)  
+1. [Instancias](#instancias)
+2. [Arquitectura de la Infraestructura](#arquitectura)
+3. [Conectividad](#conectividad) 
+4. [Scripts de Aprovisionamiento](#aprovisionamiento)
+   - [VagrantFile](#vagrantfile)
+   - [Balanceador](#balanceador)
    - [Servidores Web](#servidores-web)  
-   - [Base de Datos](#bd)  
-   - [Certificación de HTTPS con CertBot](#certbot)  
-4. [Sitio Web](#sitio-web)
+   - [Servidor NFS](#nfs)
+   - [Balanceador Base de Datos](#balanceador-db)
+   - [Base de Datos 1](#bd1)
+   - [Base de Datos 2](#bd2)  
+5. [Video de Comprobación](#video-de-comprobación)
 
 
-### IP's de cada instancia
+
+# Instancias
+**Se crearon los siguientes servidores:**
+- Balanceador
+- WebServer1
+- WebServer2
+- NFS
+- Balanceador BD (HaProxy)
+- BD1
+- BD2
+
+# Arquitectura
+- **Capa 1 (pública)**: Balanceador de carga Nginx.
+- **Capa 2 (privada)**: Dos servidores web Nginx + servidor NFS.
+- **Capa 3 (privada)**: Balanceador de base de datos.
+- **Capa 4 (privada)**: Servidores de base de datos MariaDB.
+
+# Conectividad
+- Solo la **capa 1** tiene acceso desde Internet.
+
+# Aprovisionamiento
+Cada máquina se aprovisionará mediante un script **bash**.
+
+## VagrantFile
+```ruby
+
+Vagrant.configure("2") do |config|
+  config.vm.box = "debian/bookworm64"
+  
+  config.vm.define "balanceadorW" do |balanceadorW|
+    balanceadorW.vm.hostname = "balanceadorW"
+    balanceadorW.vm.network "public_network"
+    balanceadorW.vm.network "private_network", ip: "192.168.10.5", virtualbox__intnet: "redbalweb"
+    balanceadorW.vm.network "forwarded_port", guest: 80, host: 8080
+    balanceadorW.vm.provision "shell", path: "aprov/AprovBal.sh"
+  end  
+  
+  config.vm.define "webserver1" do |webserver1|
+    webserver1.vm.hostname = "webserver1"
+    webserver1.vm.network "private_network", ip: "192.168.10.10", virtualbox__intnet: "redbalweb"
+    webserver1.vm.network "private_network", ip: "192.168.20.10", virtualbox__intnet: "redwebDBbal"
+    webserver1.vm.provision "shell", path: "aprov/AprovWeb.sh"
+  end
+  
+  config.vm.define "webserver2" do |webserver2|
+    webserver2.vm.hostname = "webserver2"
+    webserver2.vm.network "private_network", ip: "192.168.10.11", virtualbox__intnet: "redbalweb"
+    webserver2.vm.network "private_network", ip: "192.168.20.11", virtualbox__intnet: "redwebDBbal"
+    webserver2.vm.provision "shell", path: "aprov/AprovWeb.sh"
+  end  
+  
+  config.vm.define "serverNFS" do |serverNFS|
+    serverNFS.vm.hostname = "serverNFS"
+    serverNFS.vm.network "private_network", ip: "192.168.10.12", virtualbox__intnet: "redbalweb"  
+    serverNFS.vm.provision "shell", path: "aprov/AprovNFS.sh"
+  end
+  
+  config.vm.define "balanceadorDB" do |balanceadorDB|
+    balanceadorDB.vm.hostname = "balanceadorDB"
+    balanceadorDB.vm.network "private_network", ip: "192.168.20.5", virtualbox__intnet: "redwebDBbal"
+    balanceadorDB.vm.network "private_network", ip: "192.168.30.5", virtualbox__intnet: "redDBbalDB"
+    balanceadorDB.vm.provision "shell", path: "aprov/AprovDBBal.sh"
+  end
+  
+  config.vm.define "db1" do |db1|
+    db1.vm.hostname = "db1"
+    db1.vm.network "private_network", ip: "192.168.30.10", virtualbox__intnet: "redDBbalDB"
+    db1.vm.provision "shell", path: "aprov/AprovBBDD1.sh"
+  end
+  
+  config.vm.define "db2" do |db2|
+    db2.vm.hostname = "db2"
+    db2.vm.network "private_network", ip: "192.168.30.11", virtualbox__intnet: "redDBbalDB"
+    db2.vm.provision "shell", path: "aprov/AprovBBDD2.sh"
+  end
+end
+```
+***IP's de cada instancia:***
 - Balanceador
      1. Interfaz de red Pública
      2. Interfaz de red redbalweb: ```192.168.10.5```
@@ -36,76 +116,113 @@ Este CMS de **WordPress** montado a través de **AWS** está organizado en **tre
 - DB2
      1. Interfaz de red redDBbalDB: ```192.168.30.11```
 
-# Arquitectura
-- **Capa 1 (pública)**: Balanceador de carga Apache.
-- **Capa 2 (privada)**: Dos servidores web Apache + un servidor NFS con WordPress.
-- **Capa 3 (privada)**: Servidor de base de datos MariaDB.
-
-# Conectividad
-- Solo la **capa 1** tiene acceso desde Internet.
-- Solo hay acceso a la **capa 3** desde la **capa 1**.
-
-
-
-
-
-## Aprovisionamiento
-Cada máquina se aprovisionará mediante un script **bash**.
-
 ## Balanceador 
 ```sh
 #!/bin/bash
 
-# Instalación de apache2
+# Instalación de Nginx
 sudo apt update
-sudo apt install apache2 -y
 echo "Repositorios actualizados."
 
-#Instalación del módulo de balanceo de carga
-sudo a2enmod proxy
-sudo a2enmod proxy_balancer
-sudo a2enmod proxy_http
+sudo apt install nginx -y
+echo "Nginx instalado correctamente."
 
-echo "Módulos de balanceo de carga habilitados."
+# Configuración del grupo de servidores backend
+cd /etc/nginx/
+if [ ! -f conf.d/web-balancer.conf ]; then
+    sudo touch conf.d/web-balancer.conf
+fi
+
+cat <<EOF > conf.d/web-balancer.conf
+
+upstream backend_servers {
+    roundrobin;
+    server 192.168.10.10:80;
+    server 192.168.10.11:80;
+}
+
+EOF
+
+echo "Configuración del grupo de servidores backend creada."
 
 #Configuración del balanceador de carga
-sudo a2enmod ssl
-cd /etc/apache2/sites-available/
-cp default-ssl.conf wordpress-balancer.conf
-cat <<EOF > wordpress-balancer.conf
-<VirtualHost *:80>
-    <Proxy "balancer://webcluster">
-        BalancerMember http://192.168.10.20:80
-        BalancerMember http://192.168.10.21:80
-        ProxySet lbmethod=byrequests
-    </Proxy>
-    ProxyPass "/" "balancer://webcluster/"
-    ProxyPassReverse "/" "balancer://webcluster/"
+cp sites-available/default sites-available/default.bak
+sudo cat <<'EOF' > sites-available/default
+server {
+    listen 80;
+    listen [::]:80;
 
-    <Directory "/var/www/html">
-        AllowOverride All
-        Require all granted
-    </Directory>
-</VirtualHost>
+    server_name _;
+
+    location / {
+        proxy_pass http://backend_servers;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }    
+}
+
 EOF
 echo "Archivo de configuración del balanceador de carga creado."
-# Habilitar nuevo sitio y deshabilitar el por defecto
-sudo a2ensite wordpress-balancer.conf
-sudo a2dissite 000-default.conf
-sudo systemctl reload apache2
-echo "Balanceador de carga configurado y activo."
 
-sudo hostnamectl set-hostname DanielRodriguez-Bal
-echo "127.0.1.1   DanielRodriguez-Bal" | sudo tee -a /etc/hosts
-echo "Nombre del host cambiado a DanielRodriguez-Bal."
+# Habilitar nuevo sitio y deshabilitar el por defecto
+sudo systemctl enable nginx
+sudo systemctl reload nginx
+echo "Balanceador de carga configurado y activo."
 
 ```
 ***Este script realiza lo siguiente:***
-- Instalación de Apache.
-- Habilitación de módulos necesarios para poder utilizar el balanceador
-- Configuración de un sitio HTTP (Para posterior configuración HTTPS con certificado)
-- Cambio del nombre del host a DanielRodriguez-Bal
+- Instalación de Nginx.
+- Configuración de los servidores backend
+- Configuración del balanceador de carga en Nginx
 
+## Servidores Web
+```bash
+#!/bin/bash
+
+# Instalación de nginx y php5
+sudo apt update
+sudo apt install nginx nfs-common php8.2-fpm php8.2-mysql -y
+echo "Nginx y NFS cliente se han instalado correctamente y están activos."
+
+# Montar el sistema de archivos NFS
+sudo mkdir -p /var/www/php
+echo "192.168.10.12:/var/www/php /var/www/php nfs defaults 0 0" | sudo tee -a /etc/fstab
+sudo mount -a
+echo "Sistema de archivos NFS montado en /var/www/php."
+
+
+# Configurar nginx para servir el
+cd /etc/nginx/sites-available/
+cp default default.bak
+
+sed -i "s|^root /var/www.*|         root /var/www/php;|" default
+sed -i "s|^\sindex.*|         index index.php;|" default
+sudo sed -i '/^}/i \
+    location ~ \\.php$ {\
+        include snippets/fastcgi-php.conf;\
+        fastcgi_pass unix:/run/php/php8.2-fpm.sock;\
+    }' default
+
+echo "Configuración de nginx actualizada para servir archivos PHP."
+
+# Reiniciar nginx para aplicar los cambios
+sudo systemctl restart nginx
+echo "Nginx reiniciado. La configuración está activa."
+
+
+# Inhabilitar la red NAT
+#sudo route del default
+echo "Configuración de MariaDB y de la base de datos completado."
+```
+***Este script realiza lo siguiente:***
+- Instalación de los paquetes Nginx y NFS Common (NFS Cliente).
+- Montaje del directorio compartido a través de NFS
+- Hacer un backup del site default
+- Configuración de un sitio web con Nginx
+- Inhabilitación de la red
 
 ## NFS
 ```bash
@@ -116,171 +233,222 @@ sudo apt update
 sudo apt install nfs-kernel-server -y
 echo "NFS se ha instalado correctamente y está activo."
 
-# Preparar el entorno para WordPress
-sudo mkdir -p /var/www/html
+# Crear el directorio para compartir vía NFS
+sudo mkdir -p /var/www/php
 
-# Descargar y descomprimir WordPress
-cd /var/www/html
-sudo wget https://wordpress.org/latest.tar.gz
-sudo tar -xzf latest.tar.gz
-sudo mv wordpress/* .
-sudo rm -rf wordpress
-sudo rm -f latest.tar.gz
-echo "WordPress se ha descargado y descomprimido en /var/www/html."
+#Clonación del repositorio
+apt install -y git
+git clone https://github.com/josejuansanchez/iaw-practica-lamp.git
+sudo cp -r iaw-practica-lamp/src/* /var/www/php
+echo "Repositorio clonado y archivos copiados a /var/www/php."
 
-# volver al directorio principal
-cd ~
-# Configurar permisos para WordPress
-sudo chown -R www-data:www-data /var/www/html
-sudo find /var/www/html -type d -exec chmod 775 {} +
-sudo find /var/www/html -type f -exec chmod 664 {} +
-echo "Permisos de WordPress configurados."
+# Eliminación de los restos del repositorio clonado 
+sudo rm -r iaw-practica-lamp
+echo "Repositorio clonado eliminado."
 
 #configurar NFS para compartir el directorio /var/www/html
-echo "/var/www/html    192.168.10.20(rw,sync,no_subtree_check)" | sudo tee -a /etc/exports
-echo "/var/www/html    192.168.10.21(rw,sync,no_subtree_check)" | sudo tee -a /etc/exports
+echo "/var/www/php    192.168.10.10(rw,sync,no_subtree_check)" | sudo tee -a /etc/exports
+echo "/var/www/php    192.168.10.11(rw,sync,no_subtree_check)" | sudo tee -a /etc/exports
 sudo exportfs -a
 sudo systemctl restart nfs-kernel-server
 echo "NFS se ha configurado para compartir el directorio /var/www/html."
 
-# Indicar el nuevo nombre del host
-sudo hostnamectl set-hostname DanielRodriguez-NFS
-echo "127.0.1.1   DanielRodriguez-NFS" | sudo tee -a /etc/hosts
-echo "Nombre del host cambiado a DanielRodriguez-NFS."
+
+# Inhabilitar la red NAT
+#sudo route del default
+echo "Configuración de MariaDB y de la base de datos completado."
 ```
 ***Este script realiza lo siguiente:***
 - Instalación del servidor NFS.
-- Descarga de WordPress.
-- Asignación de permisos a los archivos de WordPress
+- Descarga del sistema de gestión de usuarios, a través de un repositorio. 
 - Configuración de los directorios compartidos
-- Cambio del nombre del host a DanielRodriguez-NFS
+- Inhabilitación de la red
 
-## Servidores Web
-```bash
+## Balanceador DB
+```sh
 #!/bin/bash
 
-# Instalación de apache y php5
+# Instalación de nginx
 sudo apt update
-sudo apt install apache2 -y
-sudo apt install nfs-common -y
-sudo apt install php php-mysql php-cli php-xml php-gd php-mbstring php-zip php-curl libapache2-mod-php -y
-echo "Apcahe2 y NFS cliente se han instalado correctamente y están activos."
+echo "Repositorios actualizados."
+sudo apt install haproxy -y
+echo "Nginx instalado correctamente."
 
-# Montar el directorio NFS compartido en /var/www/html
-sudo mkdir -p /var/www/html
-echo "192.168.10.28:/var/www/html /var/www/html nfs defaults 0 0" | sudo tee -a /etc/fstab
-sudo mount -a
-sudo systemctl daemon-reload
-# Asignar permisos adecuados
-sudo chown -R www-data:www-data /var/www/html
-sudo usermod -aG www-data www-data
-sudo systemctl restart apache2
-echo "Directorio NFS montado en /var/www/html."
+# Configuración del servidor HAProxy
+cd /etc/haproxy/
+sudo cp haproxy.cfg haproxy.cfg.bak
+cat <<EOF > haproxy.cfg
 
-# Configurar Apache para servir WordPress
-sudo a2enmod ssl
-cd /etc/apache2/sites-available/
-cp  000-default.conf wordpress.conf
-cat <<EOF | sudo tee /etc/apache2/sites-available/wordpress.conf
-<VirtualHost *:80>
-    DocumentRoot /var/www/html
-    <Directory /var/www/html>
-        AllowOverride All
-        Require all granted
-    </Directory>
-</VirtualHost>
+global
+    log /dev/log local0
+    maxconn 2000
+    user haproxy
+    group haproxy
+    daemon
+
+defaults
+    log     global
+    mode    tcp                    
+    option  tcplog                 
+    timeout connect 5000ms
+    timeout client  50000ms
+    timeout server  50000ms
+
+frontend db_front
+    bind *:3306
+    mode tcp
+    default_backend balancea_db
+
+backend balancea_db
+    mode tcp
+    balance roundrobin
+    option tcp-check
+    server db1 192.168.30.10:3306 check
+    server db2 192.168.30.11:3306 check
+
 EOF
 
-sudo a2ensite wordpress.conf
-sudo a2dissite 000-default.conf
-sudo systemctl restart apache2
-echo "Apache configurado para servir WordPress desde /var/www/html."
+# Habilitar y reiniciar el servicio HAProxy
+sudo systemctl enable haproxy
+sudo systemctl restart haproxy
 
-# Indicar el nuevo nombre del host
-sudo hostnamectl set-hostname DanielRodriguez-Web
-echo "127.0.1.1   DanielRodriguez-Web" | sudo tee -a /etc/hosts
-echo "Nombre del host cambiado a DanielRodriguez-Web."
+# Inhabilitar la red NAT
+sudo route del default
+echo "Configuración de HAProxy completada."
 ```
 ***Este script realiza lo siguiente:***
-- Instalación de los paquetes Apache y NFS Common (NFS Cliente).
-- Montaje del directorio compartido a través de NFS
-- Adecuación de permisos del directorio compartido
-- Configuración de un sitio HTTP
-- Cambio del nombre del host a DanielRodriguez-Web
+- Instalación de HaProxy
+- Configuración de HaProxy
+- Inhabilitación de la red
 
-## BD
+## BD1
 ```bash
 #!/bin/bash
 
-# Instalación de mariadb-server
+# Instalar MariaDB
 sudo apt update
-sudo apt install mariadb-server -y
-echo "MariaDB se ha instalado correctamente y está activo."
+sudo apt install -y mariadb-server
+echo "MariaDB se ha instalado correctamente."
 
+sudo systemctl start mariadb
+sudo systemctl enable mariadb
+echo "Servicio de MariaDB iniciado y habilitado para iniciar al arrancar el sistema."
+
+# Configurar la base de datos y el usuario
 mysql -u root <<MYSQL_SCRIPT
-CREATE DATABASE wordpress;
-CREATE USER 'wordpressuser'@'%' IDENTIFIED BY 'WordPress123456789';
-GRANT ALL PRIVILEGES ON wordpress.* TO 'wordpressuser'@'%';
+CREATE USER 'daniel'@'192.168.30.%' IDENTIFIED BY '123456789';
+CREATE USER 'daniel'@'192.168.20.%' IDENTIFIED BY '123456789';
+GRANT update, insert, delete, select ON interfaz.* TO 'daniel'@'192.168.30.%';
 FLUSH PRIVILEGES;
 MYSQL_SCRIPT
 
+# Permitir conexiones remotas modificando el archivo de configuración
 sed -i "s/^bind-address.*/bind-address = 0.0.0.0/" /etc/mysql/mariadb.conf.d/50-server.cnf
 sudo systemctl restart mariadb
-echo "MariaDB permite conexones."
+echo "MariaDB permite conexiones."
 
-sudo hostnamectl set-hostname DanielRodriguez-BBDD
-echo "127.0.1.1   DanielRodriguez-BBDD" | sudo tee -a /etc/hosts
-echo "Nombre del host cambiado a DanielRodriguez-BBDD."
+#Clonar el repositorio para añadir el script de sql
+sudo apt install -y git
+git clone https://github.com/josejuansanchez/iaw-practica-lamp.git
+echo "Repositorio clonado."
+
+# Importar el script SQL
+mysql -u root interfaz < iaw-practica-lamp/db/database.sql
+echo "Base de datos importada correctamente."
+
+# Eliminar el repositorio clonado 
+sudo rm -r iaw-practica-lamp
+echo "Restos del repositorio clonado eliminado."
+
+sudo systemctl stop mariadb.service
+
+cd /etc/mysql/mariadb.conf.d/
+cp 60-galera.cnf 60-galera.cnf.bak
+cat <<EOF > 60-galera.cnf
+
+[galera]
+wsrep_on                 = ON
+wsrep_cluster_name       = "Cluster MariaDB"
+wsrep_cluster_address    = gcomm://192.168.30.10,192.168.30.11
+binlog_format            = row
+default_storage_engine   = InnoDB
+innodb_autoinc_lock_mode = 2
+bind_addres = 0.0.0.0
+wsrep_node_address = 192.168.30.10 
+wsrep_node_name ="DB1"
+wsrep_provider = /usr/lib/galera/libgalera_smm.so
+
+EOF
+
+galera_new_cluster
+sleep 5
+
+sudo systemctl enable mariadb.service
+sudo systemctl start mariadb.service
+
+# Inhabilitar la red NAT
+sudo route del default
+echo "Configuración de HAProxy completada."
+
 ```
 ***Este script realiza lo siguiente:***
 - Instalación del servidor MariaDB
 - Creación de un Base de Datos y un usuario
 - Asignación de permisos al usuario sobre la Base de Datos
 - Permisos a conexiones remotas
-- Cambio del nombre del host a DanielRodriguez-BBDD
+- Clonación del script de SQL
+- Creación de la tabla **users** a través del archivo clonado.
+- Creación del cluster
+- Inhabilitación de la red
 
-## Certbot
-Se genera el certificado para el dominio **elitescout.ddns.net**
-```bash
-sudo certbot --apache -d elitescout.ddns.net --non-interactive --agree-tos --redirect --hsts --uir
+## BD2
+```sh
+#!/bin/bash
+
+# Instalar MariaDB
+sudo apt update
+sudo apt install -y mariadb-server
+echo "MariaDB se ha instalado correctamente."
+
+sudo systemctl start mariadb
+sudo systemctl enable mariadb
+echo "Servicio de MariaDB iniciado y habilitado para iniciar al arrancar el sistema."
+
+# Configuración de Galera en el nodo 2
+cd /etc/mysql/mariadb.conf.d/
+cp 60-galera.cnf 60-galera.cnf.bak
+cat <<EOF > 60-galera.cnf
+
+[galera]
+wsrep_on                 = ON
+wsrep_cluster_name       = "Cluster MariaDB"
+wsrep_cluster_address    = gcomm://192.168.30.10,192.168.30.11
+binlog_format            = row
+default_storage_engine   = InnoDB
+innodb_autoinc_lock_mode = 2
+bind_addres = 0.0.0.0
+wsrep_node_address = 192.168.30.11
+wsrep_node_name ="DB2"
+wsrep_provider = /usr/lib/galera/libgalera_smm.so
+
+EOF
+
+sudo systemctl enable mariadb.service
+sudo systemctl start mariadb.service
+
+# Inhabilitar la red NAT
+sudo route del default
+echo "Configuración de MariaDB y de la base de datos completado."
+
 ```
-***Se le dan las siguientes:***
-- **apache:** Modifica los virtual hosts de Apache para HTTPS.
-- **d:** Apunta solo a ese dominio.
-- **non-interactive:** Se ejecuta sin pedir confirmación.
-- **agree-tos:** Acepta automáticamente los términos y condiciones de Let's Encrypt.
-- **redirect:** Redirige todas las peticiones a *HTTP* hacia *HTTPS*
-- **hsts:** Obliga a los navegadores a utilizar HTTPS.
-- **uir:** Obliga al navegador a actualizar cualquier recurso que pudiera abrirse en *HTTP* a *HTTPS*
+***Este script realiza lo siguiente:***
+- Instalación del servidor MariaDB
+- Creación del cluster
+- Inhabilitación de la red
 
 
-# Configuraciones en AWS
-## Instancias
-**Se crearon las siguientes Instancias:**
-- Balanceador
-- WebServer1
-- WebServer2
-- NFS
-- BBDD
-
-## Red
-### VPC
-***Se creó:***
-- Una VPC llamada **WordPress-vpc** en la red ```192.168.10.0/24```
-     - Dos Subredes **Privadas**:
-       1. Bal-Web-NFS: Realiza la conexión entre el Balanceador y los Servidores Web, y de estos últimos con el NFS.
-          - Subred: ````192.168.10.16/28```` ➡️ ```192.168.10.17``` hasta ```192.168.10.30```
-       2. Web-BD: Realiza la conexión entre los Servidores Web y la Base de Datos
-          - Subred: ````192.168.10.32/28```` ➡️ ```192.168.10.33``` hasta ```192.168.10.46```
-     - Una Subred **Pública**
-       1. Pública: Da salida a Internet a través del Balanceador
-          - Subred: ````192.168.10.0/28```` ➡️ ```192.168.10.1``` hasta ```192.168.10.17```
-
-
-
-# Sitio Web
-El dominio elegido para el sitio web es [elitescout.ddns.net](https://elitescout.ddns.net/)
-
+# Video de comprobación.
+[Video](https://drive.google.com/file/d/10riB_BQPf4KMmMyxlJQJJdWqNrQdRjRC/view?usp=drive_link)
 
 
 
